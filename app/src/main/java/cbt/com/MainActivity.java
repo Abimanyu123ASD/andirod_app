@@ -80,11 +80,39 @@ public class MainActivity extends AppCompatActivity {
                         "FileSaver.saveAs = function(blob, name) {" +
                         "  var reader = new FileReader();" +
                         "  reader.onloadend = function() {" +
-                        "    var base64data = reader.result.split(',')[1];" +
-                        "    AndroidBlob.saveBlobFile(base64data, name);" +
+                        "    try {" +
+                        "      var base64data = reader.result;" +
+                        "      if (base64data.indexOf(',') !== -1) {" +
+                        "        base64data = base64data.split(',')[1];" +
+                        "      }" +
+                        "      AndroidBlob.saveBlobFile(base64data, name, blob.type || 'application/octet-stream');" +
+                        "    } catch(e) {" +
+                        "      console.error('FileSaver override error:', e);" +
+                        "    }" +
+                        "  };" +
+                        "  reader.onerror = function() {" +
+                        "    console.error('FileReader error');" +
                         "  };" +
                         "  reader.readAsDataURL(blob);" +
                         "};" +
+                        "}" +
+                        "if (typeof window.saveAs === 'function') {" +
+                        "  window._originalSaveAs = window.saveAs;" +
+                        "  window.saveAs = function(blob, name) {" +
+                        "    var reader = new FileReader();" +
+                        "    reader.onloadend = function() {" +
+                        "      try {" +
+                        "        var base64data = reader.result;" +
+                        "        if (base64data.indexOf(',') !== -1) {" +
+                        "          base64data = base64data.split(',')[1];" +
+                        "        }" +
+                        "        AndroidBlob.saveBlobFile(base64data, name, blob.type || 'text/csv');" +
+                        "      } catch(e) {" +
+                        "        console.error('saveAs override error:', e);" +
+                        "      }" +
+                        "    };" +
+                        "    reader.readAsDataURL(blob);" +
+                        "  };" +
                         "}";
         webView.evaluateJavascript(jsOverride, null);
     }
@@ -92,31 +120,46 @@ public class MainActivity extends AppCompatActivity {
     private class BlobDownloaderInterface {
         @JavascriptInterface
         public void saveBlobFile(String base64Data, String fileName) {
+            saveBlobFile(base64Data, fileName, getMimeTypeFromFileName(fileName));
+        }
+
+        @JavascriptInterface
+        public void saveBlobFile(String base64Data, String fileName, String mimeType) {
             runOnUiThread(() -> {
                 Toast.makeText(MainActivity.this, "Saving: " + fileName, Toast.LENGTH_SHORT).show();
             });
 
             try {
-                byte[] fileBytes = Base64.decode(base64Data, Base64.DEFAULT);
-                saveToDownloads(fileBytes, fileName);
+                // Clean base64 data - remove any data URL prefix
+                String cleanBase64 = base64Data;
+                if (base64Data.contains(",")) {
+                    cleanBase64 = base64Data.substring(base64Data.indexOf(",") + 1);
+                }
+                
+                byte[] fileBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
+                saveToDownloads(fileBytes, fileName, mimeType);
                 runOnUiThread(() -> {
                     Toast.makeText(MainActivity.this, "Saved: " + fileName, Toast.LENGTH_LONG).show();
                 });
             } catch (Exception e) {
                 e.printStackTrace();
                 runOnUiThread(() -> {
-                    Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    Toast.makeText(MainActivity.this, "Error saving " + fileName + ": " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
             }
         }
     }
 
     private void saveToDownloads(byte[] data, String fileName) throws Exception {
+        saveToDownloads(data, fileName, getMimeTypeFromFileName(fileName));
+    }
+
+    private void saveToDownloads(byte[] data, String fileName, String mimeType) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentResolver resolver = getContentResolver();
             ContentValues values = new ContentValues();
             values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
-            values.put(MediaStore.Downloads.MIME_TYPE, getMimeTypeFromFileName(fileName));
+            values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
             values.put(MediaStore.Downloads.IS_PENDING, 1);
 
             Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
@@ -124,20 +167,31 @@ public class MainActivity extends AppCompatActivity {
 
             if (item != null) {
                 try (OutputStream out = resolver.openOutputStream(item)) {
-                    out.write(data);
+                    if (out != null) {
+                        out.write(data);
+                        out.flush();
+                    } else {
+                        throw new Exception("Could not open output stream");
+                    }
                 }
                 values.clear();
                 values.put(MediaStore.Downloads.IS_PENDING, 0);
                 resolver.update(item, values, null, null);
             } else {
-                throw new Exception("Failed to save file");
+                throw new Exception("Failed to create file in MediaStore");
             }
         } else {
             File path = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-            if (!path.exists()) path.mkdirs();
+            if (!path.exists()) {
+                boolean created = path.mkdirs();
+                if (!created) {
+                    throw new Exception("Could not create downloads directory");
+                }
+            }
             File file = new File(path, fileName);
             try (FileOutputStream fos = new FileOutputStream(file)) {
                 fos.write(data);
+                fos.flush();
             }
         }
     }
@@ -146,8 +200,14 @@ public class MainActivity extends AppCompatActivity {
         String lowered = fileName.toLowerCase();
         if (lowered.endsWith(".pdf")) return "application/pdf";
         if (lowered.endsWith(".csv")) return "text/csv";
-        if (lowered.endsWith(".xls") || lowered.endsWith(".xlsx"))
-            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        if (lowered.endsWith(".txt")) return "text/plain";
+        if (lowered.endsWith(".xls")) return "application/vnd.ms-excel";
+        if (lowered.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        if (lowered.endsWith(".doc")) return "application/msword";
+        if (lowered.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (lowered.endsWith(".zip")) return "application/zip";
+        if (lowered.endsWith(".json")) return "application/json";
+        if (lowered.endsWith(".xml")) return "text/xml";
         return "application/octet-stream";
     }
 
