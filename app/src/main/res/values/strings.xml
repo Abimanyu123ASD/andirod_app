@@ -1,10 +1,4 @@
-<resources>
-    <string name="app_name">Cleartrip</string>
-    <string name="mh_logo">Cleartrip logo</string>
-    <string name="err_image">Internet error</string>
-    <string name="err_text">Network Error</string>
 
-    <string name="retry">Retry</string>
-    <string name="uname">Username</string>
-    <string name="pwd">Password</string>
+<resources>
+    <string name="app_name">CBT</string>
 </resources>
