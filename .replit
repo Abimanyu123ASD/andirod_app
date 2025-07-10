@@ -25,6 +25,15 @@ mode = "sequential"
 task = "shell.exec"
 args = "python preview_server.py"
 
+[[workflows.workflow]]
+name = "Build APK"
+author = 44796504
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "./gradlew assembleDebug"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
